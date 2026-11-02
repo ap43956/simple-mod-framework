@@ -1,0 +1,80 @@
+name: Build Mod Manager
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: x86_64-pc-windows-msvc
+          default: true
+
+      - name: Set up 7-Zip
+        uses: milliewalky/setup-7-zip@ce4c26956d369e4cce6c1a7c114a4ed6c98f458f
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Prep
+        run: npm install -g pkg typescript @napi-rs/cli
+
+      - name: Build Rust code
+        run: |
+          cd rust
+          yarn
+          yarn build
+          cd ../
+          copy ./rust/index.d.ts ./src/smf-rust.d.ts
+          copy ./rust/rust.win32-x64-msvc.node ./src/smf-rust.node
+
+      - name: Build EXE
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+        run: |
+          New-Item -ItemType Directory -Force -Path ./node_modules/piscina
+          robocopy ./piscina ./node_modules/piscina /E /is /it; if ($lastexitcode -lt 8) { $global:LASTEXITCODE = $null }
+          tsc --noCheck
+          copy ./src/smf-rust.node ./compiled/smf-rust.node
+          pkg package.json --targets node18-win-x64 --output Deploy.exe --compress Brotli
+
+      - name: Build GUI
+        run: |
+          cd "Mod Manager"
+          npm install
+          npm run build
+          cd ../
+
+      - name: Assemble files
+        run: |
+          New-Item -ItemType Directory dist
+          New-Item -ItemType Directory dist/Third-Party
+          New-Item -ItemType Directory dist/Info
+          New-Item -ItemType Directory dist/API
+          New-Item -ItemType Directory "dist/Mod Manager"
+          Invoke-WebRequest -Uri "https://github.com/glacier-modding/hitman-hashes/releases/latest/download/latest-hashes.7z" -OutFile "latest-hashes.7z"
+          7z x "latest-hashes.7z" -o"./dist/Third-Party"
+          robocopy ./Third-Party ./dist/Third-Party /E; if ($lastexitcode -lt 8) { $global:LASTEXITCODE = $null }
+          robocopy "./For Build" ./dist /E; if ($lastexitcode -lt 8) { $global:LASTEXITCODE = $null }
+          robocopy ./docs ./dist/Info /E; if ($lastexitcode -lt 8) { $global:LASTEXITCODE = $null }
+          robocopy ./compiled ./dist/API /E *.d.ts; if ($lastexitcode -lt 8) { $global:LASTEXITCODE = $null }
+          robocopy ".\Mod Manager\dist\win-unpacked" "./dist/Mod Manager" /E; if ($lastexitcode -lt 8) { $global:LASTEXITCODE = $null }
+          copy Deploy.exe dist
+          New-Item -Path dist -Name "Mod Manager.cmd" -ItemType "file" -Value "@echo off`ncd `"Mod Manager`"`nstart `"`" `"Mod Manager.exe`""
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: simple-mod-framework
+          path: dist
